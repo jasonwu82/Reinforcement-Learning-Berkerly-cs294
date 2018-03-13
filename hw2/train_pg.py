@@ -32,10 +32,21 @@ def build_mlp(
     #
     # Hint: use tf.layers.dense
     #========================================================================================#
-
+    x = input_placeholder
     with tf.variable_scope(scope):
         # YOUR_CODE_HERE
-        pass
+        for i in range(n_layers-1):
+            x = tf.layers.dense(
+                x,
+                size,
+                activation=activation
+            )
+        x = tf.layers.dense(
+            x,
+            output_size,
+            activation=output_activation
+        )
+    return x
 
 def pathlength(path):
     return len(path["reward"])
@@ -63,7 +74,7 @@ def train_PG(exp_name='',
              n_layers=1,
              size=32
              ):
-
+    animate = True
     start = time.time()
 
     # Configure output directory for logging
@@ -108,7 +119,7 @@ def train_PG(exp_name='',
     # Observation and action sizes
     ob_dim = env.observation_space.shape[0]
     ac_dim = env.action_space.n if discrete else env.action_space.shape[0]
-
+    print("ac_dim: {0}".format(ac_dim))
     #========================================================================================#
     #                           ----------SECTION 4----------
     # Placeholders
@@ -123,7 +134,7 @@ def train_PG(exp_name='',
         sy_ac_na = tf.placeholder(shape=[None, ac_dim], name="ac", dtype=tf.float32) 
 
     # Define a placeholder for advantages
-    sy_adv_n = TODO
+    sy_adv_n = tf.placeholder(shape=[None], name="adv", dtype=tf.float32)
 
 
     #========================================================================================#
@@ -167,9 +178,12 @@ def train_PG(exp_name='',
 
     if discrete:
         # YOUR_CODE_HERE
-        sy_logits_na = TODO
-        sy_sampled_ac = TODO # Hint: Use the tf.multinomial op
-        sy_logprob_n = TODO
+        sy_logits_na = build_mlp(sy_ob_no, ac_dim, "policy")
+
+        sy_sampled_ac = tf.multinomial(sy_logits_na, 1) # Hint: Use the tf.multinomial op
+        sy_sampled_ac = tf.reshape(sy_sampled_ac, [])
+        # how to get actual prob in tensorflow?
+        sy_logprob_n = tf.log(tf.gather(sy_logits_na, sy_ac_na))
 
     else:
         # YOUR_CODE_HERE
@@ -184,8 +198,12 @@ def train_PG(exp_name='',
     #                           ----------SECTION 4----------
     # Loss Function and Training Operation
     #========================================================================================#
-
-    loss = TODO # Loss function that we'll differentiate to get the policy gradient.
+    # real taken action vs sampled action by policy network?
+    labels = tf.one_hot(sy_ac_na, ac_dim)
+    nl = tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=sy_logits_na)
+    wnl = tf.multiply(nl, sy_adv_n)
+    #loss = tf.losses.mean_squared_error(sy_logprob_n, sy_logits_na) # Loss function that we'll differentiate to get the policy gradient.
+    loss = tf.reduce_mean(wnl)
     update_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
 
 
@@ -214,6 +232,7 @@ def train_PG(exp_name='',
     tf_config = tf.ConfigProto(inter_op_parallelism_threads=1, intra_op_parallelism_threads=1) 
 
     sess = tf.Session(config=tf_config)
+    #sess = tf.InteractiveSession()
     sess.__enter__() # equivalent to `with sess:`
     tf.global_variables_initializer().run() #pylint: disable=E1101
 
@@ -241,8 +260,13 @@ def train_PG(exp_name='',
                     env.render()
                     time.sleep(0.05)
                 obs.append(ob)
+                #print(ob[None])
+                #print(ob[None])
                 ac = sess.run(sy_sampled_ac, feed_dict={sy_ob_no : ob[None]})
-                ac = ac[0]
+                #print(sy_logits_na.eval(feed_dict={sy_ob_no : ob[None]}))
+                #print("ac:")
+                #print(ac)
+                #ac = ac[0]
                 acs.append(ac)
                 ob, rew, done, _ = env.step(ac)
                 rewards.append(rew)
@@ -262,7 +286,8 @@ def train_PG(exp_name='',
         # across paths
         ob_no = np.concatenate([path["observation"] for path in paths])
         ac_na = np.concatenate([path["action"] for path in paths])
-
+        #print("#############################")
+        #print(ac_na)
         #====================================================================================#
         #                           ----------SECTION 4----------
         # Computing Q-values
@@ -317,7 +342,18 @@ def train_PG(exp_name='',
         #====================================================================================#
 
         # YOUR_CODE_HERE
-        q_n = TODO
+        def compute_discounted_value(rewards, gamma):
+            gammas = [1]
+            for i in range(1, len(rewards)):
+                gammas.append(gammas[-1]*gamma)
+            return [np.sum([r*g for r, g in zip(rewards, gammas)])]*len(rewards)
+        #print(path)
+        #print([compute_discounted_value(path["reward"], gamma) for path in paths])
+        #print(path["action"].shape)
+        #print(path["reward"].shape)
+        q_n = np.concatenate([compute_discounted_value(path["reward"], gamma) for path in paths])
+        #q_n = np.concatenate([path["reward"] for path in paths])
+        #q_n = np.sum([r*g for r, g in zip(rewards, gammas)])
 
         #====================================================================================#
         #                           ----------SECTION 5----------
@@ -380,7 +416,13 @@ def train_PG(exp_name='',
         # and after an update, and then log them below. 
 
         # YOUR_CODE_HERE
-
+        #print("ac_na shape" + np.array(ac_na).shape)
+        #print(ac_na)
+        #print(adv_n)
+        #print(ob_no.shape)
+        #print(ac_na.shape)
+        #print(adv_n.shape)
+        out = sess.run(update_op, feed_dict={sy_ob_no: ob_no, sy_ac_na: ac_na, sy_adv_n: adv_n})
 
         # Log diagnostics
         returns = [path["reward"].sum() for path in paths]
