@@ -72,7 +72,8 @@ def train_PG(exp_name='',
              seed=0,
              # network arguments
              n_layers=1,
-             size=32
+             size=32,
+             animate_interval=20
              ):
     animate = True
     start = time.time()
@@ -178,19 +179,30 @@ def train_PG(exp_name='',
 
     if discrete:
         # YOUR_CODE_HERE
-        sy_logits_na = build_mlp(sy_ob_no, ac_dim, "policy")
+        sy_logits_na = build_mlp(sy_ob_no, ac_dim, "policy", n_layers=n_layers, size=size)
 
         sy_sampled_ac = tf.multinomial(sy_logits_na, 1) # Hint: Use the tf.multinomial op
         sy_sampled_ac = tf.reshape(sy_sampled_ac, [])
-        # how to get actual prob in tensorflow?
-        sy_logprob_n = tf.log(tf.gather(sy_logits_na, sy_ac_na))
+        #sy_ac_na_reshaped = tf.reshape(sy_ac_na, [-1, 1])
+        #seq = tf.range(0, tf.shape(sy_logits_na)[0], 1)
+        # how to index in a seqeunce?
+        #sy_logprob_n = tf.gather_nd(sy_logits_na,
+        #                            tf.stack((tf.range(tf.shape(sy_ac_na)[0],
+        #                                               dtype=sy_ac_na.dtype), sy_ac_na), axis=1))
+        labels = tf.one_hot(sy_ac_na, ac_dim)
+        sy_logprob_n = tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=sy_logits_na)
+        #sy_logprob_n = tf.gather(sy_logits_na, sy_ac_na_reshaped, axis=0)
 
+        #nl = tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=sy_logprob_n)
     else:
         # YOUR_CODE_HERE
-        sy_mean = TODO
-        sy_logstd = TODO # logstd should just be a trainable variable, not a network output.
-        sy_sampled_ac = TODO
-        sy_logprob_n = TODO  # Hint: Use the log probability under a multivariate gaussian. 
+        sy_mean = build_mlp(sy_ob_no, ac_dim, "policy", n_layers=n_layers, size=size)
+        sy_logstd = tf.get_variable(shape=[ac_dim], name='std', dtype=tf.float32) # logstd should just be a trainable variable, not a network output.
+        sy_sampled_ac = tf.random_normal(shape=tf.shape(sy_mean), mean=sy_mean, stddev=tf.exp(sy_logstd))[0]
+        #pi = tf.constant(np.pi)
+        #sy_logprob_n = pi*tf.divide(tf.square(tf.subtract(sy_ac_na, sy_mean)), tf.square(sy_logstd))  # Hint: Use the log probability under a multivariate gaussian.
+        sy_logprob_n = -tf.contrib.distributions.MultivariateNormalDiag(loc=sy_mean,
+                                                                       scale_diag=tf.exp(sy_logstd)).log_prob(sy_ac_na)
 
 
 
@@ -199,9 +211,9 @@ def train_PG(exp_name='',
     # Loss Function and Training Operation
     #========================================================================================#
     # real taken action vs sampled action by policy network?
-    labels = tf.one_hot(sy_ac_na, ac_dim)
-    nl = tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=sy_logits_na)
-    wnl = tf.multiply(nl, sy_adv_n)
+
+
+    wnl = tf.multiply(sy_logprob_n, sy_adv_n)
     #loss = tf.losses.mean_squared_error(sy_logprob_n, sy_logits_na) # Loss function that we'll differentiate to get the policy gradient.
     loss = tf.reduce_mean(wnl)
     update_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
@@ -232,7 +244,6 @@ def train_PG(exp_name='',
     tf_config = tf.ConfigProto(inter_op_parallelism_threads=1, intra_op_parallelism_threads=1) 
 
     sess = tf.Session(config=tf_config)
-    #sess = tf.InteractiveSession()
     sess.__enter__() # equivalent to `with sess:`
     tf.global_variables_initializer().run() #pylint: disable=E1101
 
@@ -253,12 +264,12 @@ def train_PG(exp_name='',
         while True:
             ob = env.reset()
             obs, acs, rewards = [], [], []
-            animate_this_episode=(len(paths)==0 and (itr % 10 == 0) and animate)
+            animate_this_episode=(len(paths)==0 and (itr % animate_interval == 0) and itr != 0 and animate)
             steps = 0
             while True:
                 if animate_this_episode:
                     env.render()
-                    time.sleep(0.05)
+                    time.sleep(0.02)
                 obs.append(ob)
                 #print(ob[None])
                 #print(ob[None])
@@ -268,6 +279,7 @@ def train_PG(exp_name='',
                 #print(ac)
                 #ac = ac[0]
                 acs.append(ac)
+                #print(ac)
                 ob, rew, done, _ = env.step(ac)
                 rewards.append(rew)
                 steps += 1
@@ -286,8 +298,7 @@ def train_PG(exp_name='',
         # across paths
         ob_no = np.concatenate([path["observation"] for path in paths])
         ac_na = np.concatenate([path["action"] for path in paths])
-        #print("#############################")
-        #print(ac_na)
+
         #====================================================================================#
         #                           ----------SECTION 4----------
         # Computing Q-values
@@ -342,16 +353,23 @@ def train_PG(exp_name='',
         #====================================================================================#
 
         # YOUR_CODE_HERE
-        def compute_discounted_value(rewards, gamma):
-            gammas = [1]
-            for i in range(1, len(rewards)):
-                gammas.append(gammas[-1]*gamma)
-            return [np.sum([r*g for r, g in zip(rewards, gammas)])]*len(rewards)
+        def compute_discounted_value(rewards, gamma, reward_to_go=reward_to_go):
+            if not reward_to_go:
+                gammas = [1]
+                for i in range(1, len(rewards)):
+                    gammas.append(gammas[-1]*gamma)
+                res = [np.sum([r*g for r, g in zip(rewards, gammas)])]*len(rewards)
+                return res
+            else:
+                res = [rewards[-1]]
+                for i in range(len(rewards)-2, -1, -1):
+                    res = [rewards[i] + gamma*res[0]] + res
+                return res
         #print(path)
         #print([compute_discounted_value(path["reward"], gamma) for path in paths])
         #print(path["action"].shape)
         #print(path["reward"].shape)
-        q_n = np.concatenate([compute_discounted_value(path["reward"], gamma) for path in paths])
+        q_n = np.concatenate([compute_discounted_value(path["reward"], gamma, reward_to_go) for path in paths])
         #q_n = np.concatenate([path["reward"] for path in paths])
         #q_n = np.sum([r*g for r, g in zip(rewards, gammas)])
 
@@ -422,6 +440,7 @@ def train_PG(exp_name='',
         #print(ob_no.shape)
         #print(ac_na.shape)
         #print(adv_n.shape)
+
         out = sess.run(update_op, feed_dict={sy_ob_no: ob_no, sy_ac_na: ac_na, sy_adv_n: adv_n})
 
         # Log diagnostics
@@ -459,6 +478,7 @@ def main():
     parser.add_argument('--n_experiments', '-e', type=int, default=1)
     parser.add_argument('--n_layers', '-l', type=int, default=1)
     parser.add_argument('--size', '-s', type=int, default=32)
+    parser.add_argument('--ani_interval', '-ai', type=int, default=20)
     args = parser.parse_args()
 
     if not(os.path.exists('data')):
@@ -489,7 +509,8 @@ def main():
                 nn_baseline=args.nn_baseline, 
                 seed=seed,
                 n_layers=args.n_layers,
-                size=args.size
+                size=args.size,
+                animate_interval=args.ani_interval
                 )
         # Awkward hacky process runs, because Tensorflow does not like
         # repeatedly calling train_PG in the same thread.
