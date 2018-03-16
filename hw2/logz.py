@@ -1,4 +1,5 @@
 import json
+import moviepy.editor as mpy
 
 """
 
@@ -110,3 +111,10 @@ def dump_tabular():
         G.output_file.flush()
     G.log_current_row.clear()
     G.first_row=False
+
+
+def to_movie(np_array, iter, fps=25):
+    output_path = osp.join(G.output_dir, "movie_{0}.mp4".format(iter))
+
+    clip = mpy.ImageSequenceClip(np_array, fps=fps)
+    clip.write_videofile(output_path)

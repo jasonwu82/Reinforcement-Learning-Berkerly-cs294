@@ -183,26 +183,16 @@ def train_PG(exp_name='',
 
         sy_sampled_ac = tf.multinomial(sy_logits_na, 1) # Hint: Use the tf.multinomial op
         sy_sampled_ac = tf.reshape(sy_sampled_ac, [])
-        #sy_ac_na_reshaped = tf.reshape(sy_ac_na, [-1, 1])
-        #seq = tf.range(0, tf.shape(sy_logits_na)[0], 1)
-        # how to index in a seqeunce?
-        #sy_logprob_n = tf.gather_nd(sy_logits_na,
-        #                            tf.stack((tf.range(tf.shape(sy_ac_na)[0],
-        #                                               dtype=sy_ac_na.dtype), sy_ac_na), axis=1))
+
         labels = tf.one_hot(sy_ac_na, ac_dim)
         sy_logprob_n = tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=sy_logits_na)
-        #sy_logprob_n = tf.gather(sy_logits_na, sy_ac_na_reshaped, axis=0)
 
-        #nl = tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=sy_logprob_n)
     else:
         # YOUR_CODE_HERE
         sy_mean = build_mlp(sy_ob_no, ac_dim, "policy", n_layers=n_layers, size=size)
         sy_logstd = tf.get_variable(shape=[ac_dim], name='std', dtype=tf.float32) # logstd should just be a trainable variable, not a network output.
         sy_sampled_ac = tf.random_normal(shape=tf.shape(sy_mean), mean=sy_mean, stddev=tf.exp(sy_logstd))[0]
-        #pi = tf.constant(np.pi)
-        #sy_logprob_n = pi*tf.divide(tf.square(tf.subtract(sy_ac_na, sy_mean)), tf.square(sy_logstd))  # Hint: Use the log probability under a multivariate gaussian.
-        sy_logprob_n = -tf.contrib.distributions.MultivariateNormalDiag(loc=sy_mean,
-                                                                       scale_diag=tf.exp(sy_logstd)).log_prob(sy_ac_na)
+        sy_logprob_n = -tf.contrib.distributions.MultivariateNormalDiag(loc=sy_mean, scale_diag=tf.exp(sy_logstd)).log_prob(sy_ac_na)
 
 
 
@@ -212,10 +202,8 @@ def train_PG(exp_name='',
     #========================================================================================#
     # real taken action vs sampled action by policy network?
 
-
     wnl = tf.multiply(sy_logprob_n, sy_adv_n)
-    #loss = tf.losses.mean_squared_error(sy_logprob_n, sy_logits_na) # Loss function that we'll differentiate to get the policy gradient.
-    loss = tf.reduce_mean(wnl)
+    loss = tf.reduce_mean(wnl)  # Loss function that we'll differentiate to get the policy gradient.
     update_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
 
 
@@ -234,7 +222,9 @@ def train_PG(exp_name='',
         # Define placeholders for targets, a loss function and an update op for fitting a 
         # neural network baseline. These will be used to fit the neural network baseline. 
         # YOUR_CODE_HERE
-        baseline_update_op = TODO
+        target_baseline = tf.placeholder(shape=[None], name="target_baseline", dtype=tf.float32)
+        loss_baseline = tf.losses.mean_squared_error(target_baseline, baseline_prediction)
+        baseline_update_op = tf.train.AdamOptimizer(learning_rate).minimize(loss_baseline)
 
 
     #========================================================================================#
@@ -261,30 +251,36 @@ def train_PG(exp_name='',
         # Collect paths until we have enough timesteps
         timesteps_this_batch = 0
         paths = []
+
+        if itr >= n_iter-1:
+            try:
+                j = input("Press Enter to continue to final iteration...")
+            except EOFError:
+                pass
+
         while True:
+            frames = []
             ob = env.reset()
             obs, acs, rewards = [], [], []
-            animate_this_episode=(len(paths)==0 and (itr % animate_interval == 0) and itr != 0 and animate)
+            animate_this_episode=(len(paths)==0 and (itr % animate_interval == 0) and animate)
             steps = 0
             while True:
                 if animate_this_episode:
-                    env.render()
-                    time.sleep(0.02)
+                    frame = env.render('rgb_array')
+                    frames.append(frame)
+                    #time.sleep(0.02)
                 obs.append(ob)
-                #print(ob[None])
-                #print(ob[None])
+
                 ac = sess.run(sy_sampled_ac, feed_dict={sy_ob_no : ob[None]})
-                #print(sy_logits_na.eval(feed_dict={sy_ob_no : ob[None]}))
-                #print("ac:")
-                #print(ac)
-                #ac = ac[0]
                 acs.append(ac)
-                #print(ac)
+
                 ob, rew, done, _ = env.step(ac)
                 rewards.append(rew)
                 steps += 1
                 if done or steps > max_path_length:
                     break
+            if animate_this_episode:
+                logz.to_movie(frames, itr)
             path = {"observation" : np.array(obs), 
                     "reward" : np.array(rewards), 
                     "action" : np.array(acs)}
@@ -293,6 +289,7 @@ def train_PG(exp_name='',
             if timesteps_this_batch > min_timesteps_per_batch:
                 break
         total_timesteps += timesteps_this_batch
+
 
         # Build arrays for observation, action for the policy gradient update by concatenating 
         # across paths
@@ -365,13 +362,9 @@ def train_PG(exp_name='',
                 for i in range(len(rewards)-2, -1, -1):
                     res = [rewards[i] + gamma*res[0]] + res
                 return res
-        #print(path)
-        #print([compute_discounted_value(path["reward"], gamma) for path in paths])
-        #print(path["action"].shape)
-        #print(path["reward"].shape)
+
         q_n = np.concatenate([compute_discounted_value(path["reward"], gamma, reward_to_go) for path in paths])
-        #q_n = np.concatenate([path["reward"] for path in paths])
-        #q_n = np.sum([r*g for r, g in zip(rewards, gammas)])
+
 
         #====================================================================================#
         #                           ----------SECTION 5----------
@@ -386,8 +379,9 @@ def train_PG(exp_name='',
             # Hint #bl1: rescale the output from the nn_baseline to match the statistics
             # (mean and std) of the current or previous batch of Q-values. (Goes with Hint
             # #bl2 below.)
-
-            b_n = TODO
+            b_n = sess.run(baseline_prediction, feed_dict={sy_ob_no: ob_no})
+            print("b_n")
+            print(b_n)
             adv_n = q_n - b_n
         else:
             adv_n = q_n.copy()
@@ -401,7 +395,9 @@ def train_PG(exp_name='',
             # On the next line, implement a trick which is known empirically to reduce variance
             # in policy gradient methods: normalize adv_n to have mean zero and std=1. 
             # YOUR_CODE_HERE
-            pass
+            mean = np.mean(adv_n, axis=0)
+            var = np.std(adv_n, axis=0)
+            adv_n = (adv_n - mean) / var
 
 
         #====================================================================================#
@@ -420,8 +416,7 @@ def train_PG(exp_name='',
             # targets to have mean zero and std=1. (Goes with Hint #bl1 above.)
 
             # YOUR_CODE_HERE
-            pass
-
+            sess.run(baseline_update_op, feed_dict={sy_ob_no: ob_no, target_baseline: q_n})
         #====================================================================================#
         #                           ----------SECTION 4----------
         # Performing the Policy Update
@@ -434,12 +429,6 @@ def train_PG(exp_name='',
         # and after an update, and then log them below. 
 
         # YOUR_CODE_HERE
-        #print("ac_na shape" + np.array(ac_na).shape)
-        #print(ac_na)
-        #print(adv_n)
-        #print(ob_no.shape)
-        #print(ac_na.shape)
-        #print(adv_n.shape)
 
         out = sess.run(update_op, feed_dict={sy_ob_no: ob_no, sy_ac_na: ac_na, sy_adv_n: adv_n})
 
@@ -480,7 +469,7 @@ def main():
     parser.add_argument('--size', '-s', type=int, default=32)
     parser.add_argument('--ani_interval', '-ai', type=int, default=20)
     args = parser.parse_args()
-
+    print(args.reward_to_go)
     if not(os.path.exists('data')):
         os.makedirs('data')
     logdir = args.exp_name + '_' + args.env_name + '_' + time.strftime("%d-%m-%Y_%H-%M-%S")
