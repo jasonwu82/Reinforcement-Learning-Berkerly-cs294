@@ -130,6 +130,12 @@ def learn(env,
     # YOUR CODE HERE
 
     ######
+    cur_estimate_q = q_func(obs_t_float, num_actions, scope="q_func", reuse=False)
+    target_q = rew_t_ph + q_func(obs_tp1_float, num_actions, scope="target_q_func", reuse=False)
+    total_error = cur_estimate_q - target_q
+
+    q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='q_func')
+    target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='target_q_func')
 
     # construct optimization op (with gradient clipping)
     learning_rate = tf.placeholder(tf.float32, (), name="learning_rate")
@@ -197,7 +203,15 @@ def learn(env,
         # YOUR CODE HERE
 
         #####
-
+        action = np.random.randint(num_actions)
+        obs, reward, done, info = env.step(action)
+        idx = replay_buffer.store_frame(last_obs)
+        replay_buffer.store_effect(idx, action, reward, done)
+        if done:
+            obs = env.reset()
+            last_obs = obs
+        else:
+            last_obs = obs
         # at this point, the environment should have been advanced one step (and
         # reset if done was true), and last_obs should point to the new latest
         # observation
@@ -247,6 +261,13 @@ def learn(env,
             # YOUR CODE HERE
 
             #####
+            obs_batch, act_batch, rew_batch, next_obs_batch, done_mask = replay_buffer.sample(batch_size)
+            initialize_interdependent_variables(session, tf.global_variables(),
+                                                {obs_t_ph: obs_batch, obs_tp1_ph: next_obs_batch})
+            session.run(train_fn, {act_t_ph: act_batch, rew_t_ph: rew_batch, done_mask_ph: done_mask})
+            num_param_updates += 1
+            if num_param_updates % target_update_freq == 0:
+                session.run(update_target_fn)
 
         ### 4. Log progress
         episode_rewards = get_wrapper_by_name(env, "Monitor").get_episode_rewards()
