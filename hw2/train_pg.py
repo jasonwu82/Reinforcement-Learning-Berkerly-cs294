@@ -252,12 +252,6 @@ def train_PG(exp_name='',
         timesteps_this_batch = 0
         paths = []
 
-        if itr >= n_iter-1:
-            try:
-                j = input("Press Enter to continue to final iteration...")
-            except EOFError:
-                pass
-
         while True:
             frames = []
             ob = env.reset()
@@ -380,8 +374,6 @@ def train_PG(exp_name='',
             # (mean and std) of the current or previous batch of Q-values. (Goes with Hint
             # #bl2 below.)
             b_n = sess.run(baseline_prediction, feed_dict={sy_ob_no: ob_no})
-            print("b_n")
-            print(b_n)
             adv_n = q_n - b_n
         else:
             adv_n = q_n.copy()
@@ -506,6 +498,7 @@ def main():
         p = Process(target=train_func, args=tuple())
         p.start()
         p.join()
+        #train_func()
         
 
 if __name__ == "__main__":
